@@ -6,7 +6,7 @@ Plugin for [Logstash](https://github.com/elastic/logstash) to write to [Vespa](h
 
 Download and unpack/install Logstash, then:
 ```
-bin/logstash-plugin install logstash-output-vespa
+bin/logstash-plugin install logstash-output-vespa_feed
 ```
 
 ## Development
@@ -15,11 +15,18 @@ If you're developing the plugin, you'll want to do something like:
 # build the gem
 ./gradlew gem
 # install it as a Logstash plugin
-/opt/logstash/bin/logstash-plugin install /path/to/logstash-output-vespa/logstash-output-vespa-$VERSION.gem
+/opt/logstash/bin/logstash-plugin install /path/to/logstash-output-vespa/logstash-output-vespa_feed-$VERSION.gem
 # profit
 /opt/logstash/bin/logstash
 ```
-Some more good info can be found [here](https://www.elastic.co/guide/en/logstash/current/java-output-plugin.html).
+Some more good info about Logstash Java plugins can be found [here](https://www.elastic.co/guide/en/logstash/current/java-output-plugin.html).
+
+It looks like the JVM options from [here](https://github.com/logstash-plugins/.ci/blob/main/dockerjdk17.env)
+are useful to make JRuby's `bundle install` work.
+
+Note to self: for some reason, `bundle exec rake publish_gem` fails, but `gem push logstash-output-vespa_feed-$VERSION.gem`
+does the trick.
+
 ## Usage
 
 Logstash config example:
