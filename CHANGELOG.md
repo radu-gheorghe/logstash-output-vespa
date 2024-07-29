@@ -1,2 +1,2 @@
-## 0.1.0
-  - Plugin created with the logstash plugin generator
+## 0.2.0
+- initial release (0.1.x is pure Ruby)

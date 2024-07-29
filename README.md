@@ -12,16 +12,14 @@ bin/logstash-plugin install logstash-output-vespa
 ## Development
 If you're developing the plugin, you'll want to do something like:
 ```
-# get the dependencies
-bundle install
 # build the gem
-gem build logstash-output-vespa.gemspec
+./gradlew gem
 # install it as a Logstash plugin
 /opt/logstash/bin/logstash-plugin install /path/to/logstash-output-vespa/logstash-output-vespa-$VERSION.gem
 # profit
 /opt/logstash/bin/logstash
 ```
-Some more good info can be found [here](https://www.elastic.co/guide/en/logstash/current/output-new-plugin.html).
+Some more good info can be found [here](https://www.elastic.co/guide/en/logstash/current/java-output-plugin.html).
 ## Usage
 
 Logstash config example:
@@ -67,18 +65,30 @@ output {
   # for debugging. You can have multiple outputs (just as you can have multiple inputs/filters)
   #stdout {}
 
-  vespa {
+  vespa_feed { # including defaults here
+  
     # Vespa endpoint, namespace, doc type (from the schema)
     vespa_url => "http://localhost:8080"
-    namespace => "my_namespace"
-    document_type => "my_doc_type"
+    namespace => "no_default_provide_yours"
+    document_type => "no_default_provide_yours_from_schema"
 
     # take the document ID from this field in each row
     # if the field doesn't exist, we generate a UUID
     id_field => "id"
 
-    # retry on failure. We have exponential backoff (2s * retry_count)
-    max_retries => 60
+    # how many HTTP/2 connections to keep open
+    max_connections => 1
+    # number of streams per connection
+    max_streams => 128
+    # request timeout (seconds) for each write operation
+    operation_timeout => 180
+    # after this time (seconds), the circuit breaker will be half-open:
+    # it will ping the endpoint to see if it's back,
+    # then resume sending requests when it's back
+    grace_period => 10
+    
+    # how many times to retry on transient failures
+    max_retries => 10
   }
 }
 ```
@@ -87,5 +97,3 @@ Then you can start Logstash while pointing to the config file like:
 ```
 bin/logstash -f logstash.conf
 ```
-
-Or you can reference this config file in `logstash.yml` along with other settings. E.g. a [dead letter queue](https://www.elastic.co/guide/en/logstash/current/dead-letter-queues.html), in case we exceed the retry count or there's an unrecoverable error. That `logstash.yml` should be picked up automatically when you do `bin/logstash`. Or if you install [Logstash as a service](https://www.elastic.co/guide/en/logstash/current/running-logstash.html) (in which case `logstash.yml` goes to `/etc/logstash`).
