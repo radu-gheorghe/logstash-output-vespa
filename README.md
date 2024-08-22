@@ -76,7 +76,9 @@ output {
   
     # Vespa endpoint, namespace, doc type (from the schema)
     vespa_url => "http://localhost:8080"
+    # namespace could be static or in the %{field} format, picking from a field in the document
     namespace => "no_default_provide_yours"
+    # similarly, doc type could be static or in the %{field} format
     document_type => "no_default_provide_yours_from_schema"
 
     # take the document ID from this field in each row
