@@ -18,6 +18,8 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 // class name must match plugin name
 @LogstashPlugin(name = "vespa_feed")
@@ -58,8 +60,10 @@ public class VespaFeed implements Output {
     private final FeedClient client;
     private final String id;
     private final String namespace;
-    private final String document_type;
-    private final String id_field;
+    private final boolean dynamicNamespace;
+    private final String documentType;
+    private final boolean dynamicDocumentType;
+    private final String idField;
     private final OperationParameters operationParameters;
     private volatile boolean stopped = false;
     ObjectMapper objectMapper;
@@ -68,9 +72,32 @@ public class VespaFeed implements Output {
     public VespaFeed(final String id, final Configuration config, final Context context) {
         this.id = id;
 
-        namespace = config.get(NAMESPACE);
-        document_type = config.get(DOCUMENT_TYPE);
-        id_field = config.get(ID_FIELD);
+        String configNamespace = config.get(NAMESPACE);
+        // if the namespace matches %{field_name} or %{[field_name]}, it's dynamic
+        String dynamicRegex = "%\\{\\[?(.*?)]?}";
+        Pattern dynamicPattern = Pattern.compile(dynamicRegex);
+        Matcher matcher = dynamicPattern.matcher(configNamespace);
+        if (matcher.matches()) {
+            dynamicNamespace = true;
+            namespace = matcher.group(1);
+        } else {
+            dynamicNamespace = false;
+            namespace = configNamespace;
+        }
+
+        // similar logic with the document type
+        String configDocumentType = config.get(DOCUMENT_TYPE);
+        matcher = dynamicPattern.matcher(configDocumentType);
+        if (matcher.matches()) {
+            dynamicDocumentType = true;
+            documentType = matcher.group(1);
+        } else {
+            dynamicDocumentType = false;
+            documentType = configDocumentType;
+        }
+
+
+        idField = config.get(ID_FIELD);
         operationParameters = OperationParameters.empty().timeout(Duration.ofSeconds(config.get(OPERATION_TIMEOUT)));
 
         client = FeedClientBuilder.create(config.get(VESPA_URL))
@@ -107,12 +134,10 @@ public class VespaFeed implements Output {
         // we put (async) indexing requests here
         List<CompletableFuture<Result>> promises = new ArrayList<>();
 
-        Iterator<Event> z = events.iterator();
-        while (z.hasNext() && !stopped) {
-            Map<String, Object> eventData = z.next().getData();
-
+        Iterator<Event> eventIterator = events.iterator();
+        while (eventIterator.hasNext() && !stopped) {
             try {
-                promises.add(asyncFeed(eventData));
+                promises.add(asyncFeed(eventIterator.next()));
             } catch (JsonProcessingException e) {
                 logger.error("Error serializing event data into JSON: ", e);
             }
@@ -130,19 +155,45 @@ public class VespaFeed implements Output {
 
     }
 
-    private CompletableFuture<Result> asyncFeed(Map<String, Object> eventData) throws JsonProcessingException {
-        // we put doc IDs here
+    private CompletableFuture<Result> asyncFeed(Event event) throws JsonProcessingException {
+        Map<String, Object> eventData = event.getData();
+
+        // we put the doc ID here
         String docIdStr;
 
         // see if the event has an ID field (as configured)
         // if it does, use it as docIdStr. Otherwise, generate a UUID
-        if (eventData.containsKey(id_field)) {
-            docIdStr = eventData.get(id_field).toString();
+        if (eventData.containsKey(idField)) {
+            docIdStr = eventData.get(idField).toString();
         } else {
             docIdStr = UUID.randomUUID().toString();
         }
+
+        // if the namespace is dynamic, we need to resolve it
+        // the default (if we don't have such a field) is simply the name of the field
+        String namespace = this.namespace;
+        if (dynamicNamespace) {
+            // we need to use the original event object to get the namespace value
+            // for some reason, getting it from the eventData map doesn't work
+            Object namespaceFieldValue = event.getField(this.namespace);
+            if (namespaceFieldValue != null) {
+                namespace = namespaceFieldValue.toString();
+            }
+        }
+
+        // similar logic for the document type
+        String documentType = this.documentType;
+        if (dynamicDocumentType) {
+            Object documentTypeFieldValue = event.getField(this.documentType);
+            if (documentTypeFieldValue != null) {
+                documentType = documentTypeFieldValue.toString();
+            }
+        }
+
+        logger.info("Feeding document with ID: {} to namespace: {} and document type: {}",
+                docIdStr, namespace, documentType);
         DocumentId docId = DocumentId.of(namespace,
-                document_type, docIdStr);
+                documentType, docIdStr);
 
         // create a document from the event data. We need an enclosing "fields" object
         // to match the Vespa put format

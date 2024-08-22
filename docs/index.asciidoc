@@ -58,14 +58,20 @@ URL to the Vespa instance
 
 * Value type is <<string,string>>
 
-Vespa namespace. A logical grouping of documents in Vespa
+Vespa namespace. A logical grouping of documents in Vespa.
+
+Can be static or dynamic, i.e. you can use something like `%{foo}` to use the value in the `foo` field as the namespace. If the field is not present or returns null, the plugin will use the field name as is (here, `foo`).
 
 [id="plugins-{type}s-{plugin}-document_type"]
 ===== `document_type`
 
 * Value type is <<string,string>>
 
-Document type. You should see it in the Vespa services.xml file as well as in the schema file
+Document type. Physical separation of documents in different files underneath.
+
+You should see it in the Vespa services.xml file as well as in the schema file.
+
+Like `namespace`, this can be static or dynamic. So you can use `%{foo}` to use the value in the `foo` field as the document type. If the field is not present or returns null, the plugin will use the field name as is (here, `foo`).
 
 [id="plugins-{type}s-{plugin}-id_field"]
 ===== `id_field`
