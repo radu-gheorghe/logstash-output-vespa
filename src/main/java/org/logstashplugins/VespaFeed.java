@@ -15,6 +15,8 @@ import org.apache.logging.log4j.Logger;
 import org.logstash.ObjectMappers;
 
 import java.net.URI;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -34,6 +36,12 @@ public class VespaFeed implements Output {
             PluginConfigSpec.requiredStringSetting("document_type");
     public static final PluginConfigSpec<String> ID_FIELD =
             PluginConfigSpec.stringSetting("id_field", "id");
+
+    // client certificate and key
+    public static final PluginConfigSpec<String> CLIENT_CERT =
+            PluginConfigSpec.stringSetting("client_cert", null);
+    public static final PluginConfigSpec<String> CLIENT_KEY =
+            PluginConfigSpec.stringSetting("client_key", null);
 
     // max HTTP/2 connections per endpoint. We only have 1
     public static final PluginConfigSpec<Long> MAX_CONNECTIONS =
@@ -100,7 +108,7 @@ public class VespaFeed implements Output {
         idField = config.get(ID_FIELD);
         operationParameters = OperationParameters.empty().timeout(Duration.ofSeconds(config.get(OPERATION_TIMEOUT)));
 
-        client = FeedClientBuilder.create(config.get(VESPA_URL))
+        FeedClientBuilder builder = FeedClientBuilder.create(config.get(VESPA_URL))
                     .setConnectionsPerEndpoint(config.get(MAX_CONNECTIONS).intValue())
                     .setMaxStreamPerConnection(config.get(MAX_STREAMS).intValue())
                     .setRetryStrategy(
@@ -122,8 +130,27 @@ public class VespaFeed implements Output {
                                     Duration.ofSeconds(config.get(GRACE_PERIOD)),
                                     Duration.ofSeconds(config.get(DOOM_PERIOD))
                             )
-                    )
-                .build();
+                    );
+
+        // set client certificate and key if they are provided
+        String clientCert = config.get(CLIENT_CERT);
+        Path clientCertPath = null;
+        if (clientCert != null) {
+            clientCertPath = Paths.get(clientCert);
+        }
+        String clientKey = config.get(CLIENT_KEY);
+        Path clientKeyPath = null;
+        if (clientKey != null) {
+            clientKeyPath = Paths.get(clientKey);
+        }
+        if (clientCertPath != null && clientKeyPath != null) {
+            builder.setCertificate(clientCertPath, clientKeyPath);
+        } else {
+            logger.warn("Client certificate and key not provided. Using insecure connection.");
+        }
+
+        // now we should have the client
+        client = builder.build();
 
         // for JSON serialization
         objectMapper = ObjectMappers.JSON_MAPPER;
@@ -190,7 +217,7 @@ public class VespaFeed implements Output {
             }
         }
 
-        logger.info("Feeding document with ID: {} to namespace: {} and document type: {}",
+        logger.trace("Feeding document with ID: {} to namespace: {} and document type: {}",
                 docIdStr, namespace, documentType);
         DocumentId docId = DocumentId.of(namespace,
                 documentType, docIdStr);
@@ -221,7 +248,7 @@ public class VespaFeed implements Output {
 
     @Override
     public Collection<PluginConfigSpec<?>> configSchema() {
-        return List.of(VESPA_URL, NAMESPACE, DOCUMENT_TYPE, ID_FIELD,
+        return List.of(VESPA_URL, CLIENT_CERT, CLIENT_KEY, NAMESPACE, DOCUMENT_TYPE, ID_FIELD,
                 MAX_CONNECTIONS, MAX_STREAMS, MAX_RETRIES, OPERATION_TIMEOUT);
     }
 

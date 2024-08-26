@@ -15,7 +15,7 @@ If you're developing the plugin, you'll want to do something like:
 # build the gem
 ./gradlew gem
 # install it as a Logstash plugin
-/opt/logstash/bin/logstash-plugin install /path/to/logstash-output-vespa/logstash-output-vespa_feed-$VERSION.gem
+/opt/logstash/bin/logstash-plugin install /path/to/logstash-output-vespa/logstash-output-vespa_feed-0.4.0.gem
 # profit
 /opt/logstash/bin/logstash
 ```
@@ -74,8 +74,16 @@ output {
 
   vespa_feed { # including defaults here
   
-    # Vespa endpoint, namespace, doc type (from the schema)
+    # Vespa endpoint
     vespa_url => "http://localhost:8080"
+    
+    # for HTTPS URLS (e.g. Vespa Cloud), you may want to provide a certificate and key for mTLS authentication
+    client_cert => "/home/radu/vespa_apps/myapp/security/clients.pem"
+    # make sure the key isn't password-protected
+    # if it is, you can create a new key without a password like this:
+    # openssl rsa -in myapp_key_with_pass.pem -out myapp_key.pem
+    client_key => "/home/radu/vespa_apps/myapp_key.pem"
+    
     # namespace could be static or in the %{field} format, picking from a field in the document
     namespace => "no_default_provide_yours"
     # similarly, doc type could be static or in the %{field} format
