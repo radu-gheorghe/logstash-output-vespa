@@ -20,8 +20,6 @@ import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 // class name must match plugin name
 @LogstashPlugin(name = "vespa_feed")
@@ -42,6 +40,13 @@ public class VespaFeed implements Output {
             PluginConfigSpec.stringSetting("client_cert", null);
     public static final PluginConfigSpec<String> CLIENT_KEY =
             PluginConfigSpec.stringSetting("client_key", null);
+
+    // put, update or remove
+    public static final PluginConfigSpec<String> OPERATION =
+            PluginConfigSpec.stringSetting("operation", "put");
+    // whether to add create=true to the put/update request
+    public static final PluginConfigSpec<Boolean> CREATE =
+            PluginConfigSpec.booleanSetting("create", false);
 
     // max HTTP/2 connections per endpoint. We only have 1
     public static final PluginConfigSpec<Long> MAX_CONNECTIONS =
@@ -71,8 +76,11 @@ public class VespaFeed implements Output {
     private final boolean dynamicNamespace;
     private final String documentType;
     private final boolean dynamicDocumentType;
+    private final String operation;
+    private final boolean dynamicOperation;
+    private final boolean create;
     private final String idField;
-    private final OperationParameters operationParameters;
+    private final long operationTimeout;
     private volatile boolean stopped = false;
     ObjectMapper objectMapper;
 
@@ -80,33 +88,26 @@ public class VespaFeed implements Output {
     public VespaFeed(final String id, final Configuration config, final Context context) {
         this.id = id;
 
-        String configNamespace = config.get(NAMESPACE);
         // if the namespace matches %{field_name} or %{[field_name]}, it's dynamic
-        String dynamicRegex = "%\\{\\[?(.*?)]?}";
-        Pattern dynamicPattern = Pattern.compile(dynamicRegex);
-        Matcher matcher = dynamicPattern.matcher(configNamespace);
-        if (matcher.matches()) {
-            dynamicNamespace = true;
-            namespace = matcher.group(1);
-        } else {
-            dynamicNamespace = false;
-            namespace = configNamespace;
-        }
+        DynamicOption configOption = new DynamicOption(config.get(NAMESPACE));
+        dynamicNamespace = configOption.isDynamic();
+        namespace = configOption.getParsedConfigValue();
 
-        // similar logic with the document type
-        String configDocumentType = config.get(DOCUMENT_TYPE);
-        matcher = dynamicPattern.matcher(configDocumentType);
-        if (matcher.matches()) {
-            dynamicDocumentType = true;
-            documentType = matcher.group(1);
-        } else {
-            dynamicDocumentType = false;
-            documentType = configDocumentType;
-        }
+        // same with document type
+        configOption = new DynamicOption(config.get(DOCUMENT_TYPE));
+        dynamicDocumentType = configOption.isDynamic();
+        documentType = configOption.getParsedConfigValue();
 
+        // and operation
+        configOption = new DynamicOption(config.get(OPERATION));
+        dynamicOperation = configOption.isDynamic();
+        operation = configOption.getParsedConfigValue();
+        create = config.get(CREATE);
+        validateOperationAndCreate();
+
+        operationTimeout = config.get(OPERATION_TIMEOUT);
 
         idField = config.get(ID_FIELD);
-        operationParameters = OperationParameters.empty().timeout(Duration.ofSeconds(config.get(OPERATION_TIMEOUT)));
 
         FeedClientBuilder builder = FeedClientBuilder.create(config.get(VESPA_URL))
                     .setConnectionsPerEndpoint(config.get(MAX_CONNECTIONS).intValue())
@@ -133,27 +134,46 @@ public class VespaFeed implements Output {
                     );
 
         // set client certificate and key if they are provided
-        String clientCert = config.get(CLIENT_CERT);
-        Path clientCertPath = null;
-        if (clientCert != null) {
-            clientCertPath = Paths.get(clientCert);
-        }
-        String clientKey = config.get(CLIENT_KEY);
-        Path clientKeyPath = null;
-        if (clientKey != null) {
-            clientKeyPath = Paths.get(clientKey);
-        }
-        if (clientCertPath != null && clientKeyPath != null) {
-            builder.setCertificate(clientCertPath, clientKeyPath);
-        } else {
-            logger.warn("Client certificate and key not provided. Using insecure connection.");
-        }
+        builder = addCertAndKeyToBuilder(config, builder);
 
         // now we should have the client
         client = builder.build();
 
         // for JSON serialization
         objectMapper = ObjectMappers.JSON_MAPPER;
+    }
+
+    private void validateOperationAndCreate() {
+        if (!dynamicOperation) {
+            if (!operation.equals("put") && !operation.equals("update") && !operation.equals("remove")) {
+                throw new IllegalArgumentException("Operation must be put, update or remove");
+            }
+            if (operation.equals("remove") && create) {
+                throw new IllegalArgumentException("Operation remove cannot have create=true");
+            }
+        }
+    }
+
+    private FeedClientBuilder addCertAndKeyToBuilder(Configuration config, FeedClientBuilder builder) {
+        String clientCert = config.get(CLIENT_CERT);
+        Path clientCertPath = null;
+        if (clientCert != null) {
+            clientCertPath = Paths.get(clientCert);
+        }
+
+        String clientKey = config.get(CLIENT_KEY);
+        Path clientKeyPath = null;
+        if (clientKey != null) {
+            clientKeyPath = Paths.get(clientKey);
+        }
+
+        if (clientCertPath != null && clientKeyPath != null) {
+            builder.setCertificate(clientCertPath, clientKeyPath);
+        } else {
+            logger.warn("Client certificate and key not provided. Using insecure connection.");
+        }
+
+        return builder;
     }
 
     @Override
@@ -164,10 +184,18 @@ public class VespaFeed implements Output {
         Iterator<Event> eventIterator = events.iterator();
         while (eventIterator.hasNext() && !stopped) {
             try {
-                promises.add(asyncFeed(eventIterator.next()));
+                CompletableFuture<Result> promise = asyncFeed(eventIterator.next());
+                if (promise != null) {
+                    promises.add(promise);
+                }
             } catch (JsonProcessingException e) {
                 logger.error("Error serializing event data into JSON: ", e);
             }
+        }
+
+        // check if we have any promises (we might have dropped some invalid events)
+        if (promises.isEmpty()) {
+            return;
         }
 
         // wait for all futures to complete
@@ -200,22 +228,27 @@ public class VespaFeed implements Output {
         // the default (if we don't have such a field) is simply the name of the field
         String namespace = this.namespace;
         if (dynamicNamespace) {
-            // we need to use the original event object to get the namespace value
-            // for some reason, getting it from the eventData map doesn't work
-            Object namespaceFieldValue = event.getField(this.namespace);
-            if (namespaceFieldValue != null) {
-                namespace = namespaceFieldValue.toString();
-            }
+            namespace = getDynamicField(event, this.namespace);
         }
 
         // similar logic for the document type
         String documentType = this.documentType;
         if (dynamicDocumentType) {
-            Object documentTypeFieldValue = event.getField(this.documentType);
-            if (documentTypeFieldValue != null) {
-                documentType = documentTypeFieldValue.toString();
+            documentType = getDynamicField(event, this.documentType);
+        }
+
+        // and the operation
+        String operation = this.operation;
+        if (dynamicOperation) {
+            operation = getDynamicField(event, this.operation);
+            if (!operation.equals("put") && !operation.equals("update") && !operation.equals("remove")) {
+                logger.error("Operation must be put, update or remove. Ignoring operation: {}", operation);
+                // TODO we should put this in the dead letter queue
+                return null;
             }
         }
+        // add create=true, if applicable
+        OperationParameters operationParameters = addCreateIfApplicable(operation, docIdStr);
 
         logger.trace("Feeding document with ID: {} to namespace: {} and document type: {}",
                 docIdStr, namespace, documentType);
@@ -228,7 +261,52 @@ public class VespaFeed implements Output {
         doc.put("fields", eventData);
 
         // create the request to feed the document
-        return client.put(docId, toJson(doc), operationParameters);
+        //return client.put(docId, toJson(doc), operationParameters);
+        if (operation.equals("put")) {
+            return client.put(docId, toJson(doc), operationParameters);
+        } else if (operation.equals("update")) {
+            return client.update(docId, toJson(doc), operationParameters);
+        } else {
+            return client.remove(docId, operationParameters);
+        }
+    }
+
+    /**
+     * Add create=true to the operation parameters if the operation is put or update
+     * @param operation
+     * @param docId
+     * @return The operation parameters with create=true if applicable
+     */
+    private OperationParameters addCreateIfApplicable(String operation, String docId) {
+        OperationParameters operationParameters = OperationParameters.empty()
+                .timeout(Duration.ofSeconds(operationTimeout));
+
+        if (create) {
+            if (operation.equals("put") || operation.equals("update")) {
+                return operationParameters.createIfNonExistent(true);
+            } else {
+                logger.warn("Operation remove cannot have create=true." +
+                        " Ignoring create=true for docID: {}", docId);
+            }
+        }
+        return operationParameters;
+    }
+
+    /**
+     * We need to use the original event object to get the fieldName value.
+     * For some reason, getting it from the eventData map of asyncFeed doesn't work
+     *
+     * @param event The original event object
+     * @param fieldName The field name to get
+     * @return The value of the field or the field name if it doesn't exist
+     */
+    private String getDynamicField(Event event, String fieldName) {
+        Object namespaceFieldValue = event.getField(fieldName);
+        if (namespaceFieldValue != null) {
+            return namespaceFieldValue.toString();
+        } else {
+            return fieldName;
+        }
     }
 
     private String toJson(Map<String, Object> eventData) throws JsonProcessingException {
@@ -248,7 +326,7 @@ public class VespaFeed implements Output {
 
     @Override
     public Collection<PluginConfigSpec<?>> configSchema() {
-        return List.of(VESPA_URL, CLIENT_CERT, CLIENT_KEY, NAMESPACE, DOCUMENT_TYPE, ID_FIELD,
+        return List.of(VESPA_URL, CLIENT_CERT, CLIENT_KEY, OPERATION, CREATE, NAMESPACE, DOCUMENT_TYPE, ID_FIELD,
                 MAX_CONNECTIONS, MAX_STREAMS, MAX_RETRIES, OPERATION_TIMEOUT);
     }
 

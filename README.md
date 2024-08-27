@@ -88,6 +88,12 @@ output {
     namespace => "no_default_provide_yours"
     # similarly, doc type could be static or in the %{field} format
     document_type => "no_default_provide_yours_from_schema"
+    
+    # operation can be "put", "update", "remove" or dynamic (in the %{field} format)
+    operation => "put"
+    
+    # add the create=true parameter to the feed request (for update and put operations)
+    create => false
 
     # take the document ID from this field in each row
     # if the field doesn't exist, we generate a UUID

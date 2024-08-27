@@ -16,7 +16,7 @@ END - GENERATED VARIABLES, DO NOT EDIT!
 
 [id="plugins-{type}s-{plugin}"]
 
-=== Vesoa output plugin
+=== Vespa output plugin
 
 include::{include_path}/plugin_header.asciidoc[]
 
@@ -39,6 +39,8 @@ Writes documents to Vespa.
 | <<plugins-{type}s-{plugin}-client_key>> |<<string,string>>|No
 | <<plugins-{type}s-{plugin}-namespace>> |<<string,string>>|Yes
 | <<plugins-{type}s-{plugin}-document_type>> |<<string,string>>|Yes
+| <<plugins-{type}s-{plugin}-operation>> |<<string,string>>|No
+| <<plugins-{type}s-{plugin}-create>> |<<boolean,boolean>>|No
 | <<plugins-{type}s-{plugin}-id_field>> |<<string,string>>|No
 | <<plugins-{type}s-{plugin}-max_retries>> |<<number,number>>|No
 | <<plugins-{type}s-{plugin}-max_connections>> |<<number,number>>|No
@@ -94,6 +96,20 @@ Document type. Physical separation of documents in different files underneath.
 You should see it in the Vespa services.xml file as well as in the schema file.
 
 Like `namespace`, this can be static or dynamic. So you can use `%{foo}` to use the value in the `foo` field as the document type. If the field is not present or returns null, the plugin will use the field name as is (here, `foo`).
+
+[id="plugins-{type}s-{plugin}-operation"]
+===== `operation`
+
+* Value type is <<string,string>>
+
+Operation to perform. Can be `put`, `update`, or `remove`. Dynamic values are supported (e.g. `%{foo}`). If not present, the plugin will use `put`.
+
+[id="plugins-{type}s-{plugin}-create"]
+===== `create`
+
+* Value type is <<boolean,boolean>>
+
+If set to `true`, the plugin will add the `create=true` parameter to the request. It works for `put` and `update` operations, but mostly used for `update` as https://docs.vespa.ai/en/document-v1-api-guide.html#upserts[upserts].
 
 [id="plugins-{type}s-{plugin}-id_field"]
 ===== `id_field`
